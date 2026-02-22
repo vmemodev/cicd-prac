@@ -1,0 +1,26 @@
+version: 0.2
+
+phases:
+  install:
+    runtime-versions:
+      nodejs: 20
+  pre_build:
+    commands:
+      - echo "== npm ci =="
+      - npm ci
+  build:
+    commands:
+      - echo "== build (tsc) =="
+      - npm run build
+      - echo "== prepare artifact bundle =="
+      - mkdir -p bundle
+      - cp -r dist bundle/dist
+      - cp package.json package-lock.json bundle/
+      - (cd bundle && zip -r ../artifact.zip .)
+  post_build:
+    commands:
+      - echo "Build finished. artifact.zip created."
+
+artifacts:
+  files:
+    - artifact.zip
