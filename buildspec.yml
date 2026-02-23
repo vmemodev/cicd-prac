@@ -24,5 +24,6 @@ phases:
       - echo "Build finished. artifact.zip created."
 
 artifacts:
+  base-directory: bundle
   files:
-    - artifact.zip
+    - '**/*'
