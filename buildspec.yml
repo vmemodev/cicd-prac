@@ -16,6 +16,8 @@ phases:
       - mkdir -p bundle
       - cp -r dist bundle/dist
       - cp package.json package-lock.json bundle/
+      - cp -r scripts bundle/scripts
+      - cp appspec.yml bundle/
       - (cd bundle && zip -r ../artifact.zip .)
   post_build:
     commands:
