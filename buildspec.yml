@@ -18,7 +18,7 @@ phases:
       - cp package.json package-lock.json bundle/
       - cp -r scripts bundle/scripts
       - cp appspec.yml bundle/
-      - (cd bundle && zip -r ../artifact.zip .)
+      #- (cd bundle && zip -r ../artifact.zip .)
   post_build:
     commands:
       - echo "Build finished. artifact.zip created."
