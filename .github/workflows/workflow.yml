@@ -1,6 +1,5 @@
-name: CodeBuild -> CodeDeploy
-
 # GitHub Actions で CodeBuild を起動し、ビルド完了後に CodeDeploy でデプロイする
+name: CodeBuild -> CodeDeploy
 
 # トリガー定義
 # mainブランチにpushされるたびに実行
