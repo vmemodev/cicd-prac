@@ -1,0 +1,126 @@
+name: CodeBuild -> CodeDeploy
+
+# GitHub Actions で CodeBuild を起動し、ビルド完了後に CodeDeploy でデプロイする
+
+# トリガー定義
+# mainブランチにpushされるたびに実行
+on:
+  push:
+    branches: ["main"]
+
+# 同時実行の制御
+concurrency:
+  group: cicd-main
+  cancel-in-progress: true
+
+# OIDCを使用して AWS へアクセスするための権限設定
+permissions:
+  id-token: write
+  contents: read
+
+# 環境変数定義
+env:
+  AWS_REGION: ap-northeast-1
+
+  # CodeBuild プロジェクト名
+  CODEBUILD_PROJECT_NAME: cicd-prac-build
+
+  # CodeDeploy アプリケーション名とデプロイグループ名
+  CODEDEPLOY_APP_NAME: cicd-test
+  CODEDEPLOY_DEPLOYMENT_GROUP: cicd-test-dg
+
+  # CodeBuild が出力した成果物（S3）を CodeDeploy に渡すための情報
+  # ※ CodeBuild プロジェクトのArtifacts設定と一致させる
+  ARTIFACT_BUCKET: cicd-prac-artifacts-719674478633
+  ARTIFACT_KEY: artifact.zip
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # 1) GitHub Actions -> AWS (OIDC AssumeRole)
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::719674478633:role/github-actions-deploy-role
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Install jq
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y jq
+
+      # 2) CodeBuild start-build（main pushのコミットをビルドに紐づける）
+      - name: Start CodeBuild
+        id: start_build
+        run: |
+          echo "Starting CodeBuild project: ${CODEBUILD_PROJECT_NAME}"
+
+          BUILD_JSON=$(aws codebuild start-build \
+            --project-name "${CODEBUILD_PROJECT_NAME}" \
+            --source-version "${GITHUB_SHA}" \
+            --output json)
+
+          echo "${BUILD_JSON}" | jq .
+          BUILD_ID=$(echo "${BUILD_JSON}" | jq -r '.build.id')
+          echo "BUILD_ID=${BUILD_ID}" >> $GITHUB_ENV
+
+      # 3) CodeBuild 完了待ち（成功/失敗で分岐）
+      - name: Wait for CodeBuild to finish
+        run: |
+          echo "Waiting CodeBuild... BUILD_ID=${BUILD_ID}"
+
+          # 最大待機（秒）を設定
+          MAX_WAIT=1800
+          INTERVAL=15
+          ELAPSED=0
+
+          while true; do
+            RES=$(aws codebuild batch-get-builds --ids "${BUILD_ID}" --output json)
+            STATUS=$(echo "${RES}" | jq -r '.builds[0].buildStatus')
+            echo "CodeBuild status: ${STATUS}"
+
+            if [ "${STATUS}" = "SUCCEEDED" ]; then
+              break
+            fi
+
+            if [ "${STATUS}" = "FAILED" ] || [ "${STATUS}" = "FAULT" ] || [ "${STATUS}" = "STOPPED" ] || [ "${STATUS}" = "TIMED_OUT" ]; then
+              echo "CodeBuild ended with status=${STATUS}"
+              exit 1
+            fi
+
+            sleep ${INTERVAL}
+            ELAPSED=$((ELAPSED + INTERVAL))
+            if [ ${ELAPSED} -ge ${MAX_WAIT} ]; then
+              echo "Timeout waiting CodeBuild (>${MAX_WAIT}s)"
+              exit 1
+            fi
+          done
+
+      # 4) CodeDeploy create-deployment（S3 artifact を指定）
+      - name: Start CodeDeploy deployment
+        id: start_deploy
+        run: |
+          echo "Starting CodeDeploy..."
+
+          DEPLOY_JSON=$(aws deploy create-deployment \
+            --application-name "${CODEDEPLOY_APP_NAME}" \
+            --deployment-group-name "${CODEDEPLOY_DEPLOYMENT_GROUP}" \
+            --s3-location bucket="${ARTIFACT_BUCKET}",key="${ARTIFACT_KEY}",bundleType=zip \
+            --description "GitHub Actions deploy: ${GITHUB_SHA}" \
+            --output json)
+
+          echo "${DEPLOY_JSON}" | jq .
+          DEPLOYMENT_ID=$(echo "${DEPLOY_JSON}" | jq -r '.deploymentId')
+          echo "DEPLOYMENT_ID=${DEPLOYMENT_ID}" >> $GITHUB_ENV
+
+      # 5) CodeDeploy 完了待ち
+      - name: Wait for CodeDeploy to finish
+        run: |
+          echo "Waiting CodeDeploy... DEPLOYMENT_ID=${DEPLOYMENT_ID}"
+          aws deploy wait deployment-successful --deployment-id "${DEPLOYMENT_ID}"
+          echo "Deployment succeeded."
